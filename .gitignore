@@ -1,0 +1,17 @@
+# os
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+*.swp
+
+# secrets (also covered per-subpackage)
+.env
+.env.local
+.env.*.local
+
+# tmp
+.tmp-backup/
+*.bak
