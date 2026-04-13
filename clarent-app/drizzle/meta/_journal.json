@@ -29,6 +29,13 @@
       "when": 1776111212777,
       "tag": "0003_brainy_preak",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776111537909,
+      "tag": "0004_crazy_maestro",
+      "breakpoints": true
     }
   ]
 }
