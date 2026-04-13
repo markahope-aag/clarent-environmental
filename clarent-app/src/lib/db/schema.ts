@@ -104,6 +104,8 @@ export const generators = pgTable(
   'generators',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    // Populated when the generator signs up via Clerk (each generator = one Clerk org)
+    clerkOrganizationId: text('clerk_organization_id'),
     name: text('name').notNull(),
     dba: text('dba'),
     generatorClass: generatorClassEnum('generator_class'),
@@ -119,6 +121,9 @@ export const generators = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    uniqueIndex('generators_clerk_organization_id_key')
+      .on(t.clerkOrganizationId)
+      .where(sql`${t.clerkOrganizationId} IS NOT NULL`),
     index('generators_name_idx').on(t.name),
     index('generators_status_idx').on(t.status),
     index('generators_marketing_stage_idx').on(t.marketingStage),
@@ -201,6 +206,8 @@ export const vendors = pgTable(
   'vendors',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    // Populated when vendor signs up via Clerk (each vendor = one Clerk org)
+    clerkOrganizationId: text('clerk_organization_id'),
     name: text('name').notNull(),
     dba: text('dba'),
     vendorType: vendorTypeEnum('vendor_type').notNull(),
@@ -223,6 +230,9 @@ export const vendors = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    uniqueIndex('vendors_clerk_organization_id_key')
+      .on(t.clerkOrganizationId)
+      .where(sql`${t.clerkOrganizationId} IS NOT NULL`),
     index('vendors_status_idx').on(t.status),
     index('vendors_vendor_type_idx').on(t.vendorType),
     index('vendors_name_idx').on(t.name),
@@ -1810,5 +1820,96 @@ export const conflictResolutions = pgTable(
   (t) => [
     index('conflict_resolutions_federal_requirement_id_idx').on(t.federalRequirementId),
     index('conflict_resolutions_state_idx').on(t.state),
+  ],
+);
+
+// ============================================================================
+// Group 8 — Clerk identity bridge
+// ============================================================================
+//
+// Clerk is the source of truth for user identity and organization membership.
+// These tables are a thin local cache kept in sync via Clerk webhooks so that
+// Postgres-side joins / RLS policies can resolve Clerk IDs → Clarent entities
+// (generators, vendors) without hitting the Clerk API on every query.
+
+export const organizationTypeEnum = pgEnum('organization_type', ['generator', 'vendor', 'ops']);
+
+// ----------------------------------------------------------------------------
+// app_users — identity cache keyed by Clerk user ID
+// ----------------------------------------------------------------------------
+
+export const appUsers = pgTable(
+  'app_users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clerkUserId: text('clerk_user_id').notNull(),
+    email: text('email'),
+    firstName: text('first_name'),
+    lastName: text('last_name'),
+    imageUrl: text('image_url'),
+    clerkCreatedAt: timestamp('clerk_created_at', { withTimezone: true }),
+    clerkUpdatedAt: timestamp('clerk_updated_at', { withTimezone: true }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('app_users_clerk_user_id_key').on(t.clerkUserId),
+    index('app_users_email_idx').on(t.email),
+  ],
+);
+
+// ----------------------------------------------------------------------------
+// app_organizations — Clerk org → generator/vendor/ops mapping
+// ----------------------------------------------------------------------------
+
+export const appOrganizations = pgTable(
+  'app_organizations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clerkOrganizationId: text('clerk_organization_id').notNull(),
+    organizationType: organizationTypeEnum('organization_type').notNull(),
+    // Exactly one of these is set depending on type
+    generatorId: uuid('generator_id').references(() => generators.id, { onDelete: 'set null' }),
+    vendorId: uuid('vendor_id').references(() => vendors.id, { onDelete: 'set null' }),
+    name: text('name').notNull(),
+    slug: text('slug'),
+    imageUrl: text('image_url'),
+    clerkCreatedAt: timestamp('clerk_created_at', { withTimezone: true }),
+    clerkUpdatedAt: timestamp('clerk_updated_at', { withTimezone: true }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('app_organizations_clerk_organization_id_key').on(t.clerkOrganizationId),
+    index('app_organizations_type_idx').on(t.organizationType),
+    index('app_organizations_generator_id_idx').on(t.generatorId),
+    index('app_organizations_vendor_id_idx').on(t.vendorId),
+  ],
+);
+
+// ----------------------------------------------------------------------------
+// app_memberships — user ↔ organization membership cache
+// ----------------------------------------------------------------------------
+
+export const appMemberships = pgTable(
+  'app_memberships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clerkUserId: text('clerk_user_id').notNull(),
+    clerkOrganizationId: text('clerk_organization_id').notNull(),
+    // Clerk membership role (e.g. 'org:admin', 'org:member')
+    role: text('role').notNull(),
+    // Additional Clarent-side permissions layered on top
+    permissions: text('permissions').array(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('app_memberships_user_org_key').on(t.clerkUserId, t.clerkOrganizationId),
+    index('app_memberships_user_idx').on(t.clerkUserId),
+    index('app_memberships_org_idx').on(t.clerkOrganizationId),
   ],
 );
