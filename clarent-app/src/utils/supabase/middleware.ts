@@ -4,8 +4,19 @@ import { NextResponse, type NextRequest } from 'next/server';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-export const updateSession = async (request: NextRequest) => {
-  let supabaseResponse = NextResponse.next({ request });
+/**
+ * Refresh the Supabase auth session on the request, returning a response
+ * with any updated session cookies.
+ *
+ * If `rewriteUrl` is provided, the returned response is a
+ * `NextResponse.rewrite` to that URL so session cookies and the internal
+ * path rewrite land in the same response. Otherwise a plain
+ * `NextResponse.next()` is returned.
+ */
+export const updateSession = async (request: NextRequest, rewriteUrl?: URL) => {
+  let supabaseResponse = rewriteUrl
+    ? NextResponse.rewrite(rewriteUrl, { request })
+    : NextResponse.next({ request });
 
   const supabase = createServerClient(supabaseUrl, supabaseKey, {
     cookies: {
@@ -14,7 +25,9 @@ export const updateSession = async (request: NextRequest) => {
       },
       setAll(cookiesToSet) {
         cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-        supabaseResponse = NextResponse.next({ request });
+        supabaseResponse = rewriteUrl
+          ? NextResponse.rewrite(rewriteUrl, { request })
+          : NextResponse.next({ request });
         cookiesToSet.forEach(({ name, value, options }) =>
           supabaseResponse.cookies.set(name, value, options),
         );
