@@ -15,6 +15,13 @@
       "when": 1776110871701,
       "tag": "0001_fluffy_dagger",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776111068960,
+      "tag": "0002_old_roughhouse",
+      "breakpoints": true
     }
   ]
 }
