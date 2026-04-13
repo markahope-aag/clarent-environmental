@@ -15,7 +15,8 @@
     "format:check": "prettier --check .",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
-    "db:push": "supabase db push"
+    "db:push": "supabase db push",
+    "db:seed:reference": "node scripts/seed-reference.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",
