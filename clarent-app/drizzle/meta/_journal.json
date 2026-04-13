@@ -43,6 +43,13 @@
       "when": 1776111848288,
       "tag": "0005_daffy_whirlwind",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1776112049489,
+      "tag": "0006_red_ravenous",
+      "breakpoints": true
     }
   ]
 }
