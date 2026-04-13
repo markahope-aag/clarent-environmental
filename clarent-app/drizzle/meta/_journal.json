@@ -36,6 +36,13 @@
       "when": 1776111537909,
       "tag": "0004_crazy_maestro",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1776111848288,
+      "tag": "0005_daffy_whirlwind",
+      "breakpoints": true
     }
   ]
 }
