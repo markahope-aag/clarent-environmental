@@ -10,7 +10,6 @@
 
 import postgres from 'postgres';
 import { readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 
 if (process.env.DEV_SEED !== '1') {
   console.error('Refusing to run without DEV_SEED=1. This script is dev-only.');
