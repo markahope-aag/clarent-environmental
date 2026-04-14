@@ -17,6 +17,7 @@
     "db:studio": "drizzle-kit studio",
     "db:push": "supabase db push",
     "db:seed:reference": "node scripts/seed-reference.mjs",
+    "db:seed:dev": "cross-env DEV_SEED=1 node scripts/seed-dev.mjs",
     "prepare": "cd .. && git config core.hooksPath .husky 2>/dev/null || true"
   },
   "lint-staged": {
