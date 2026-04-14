@@ -60,6 +60,24 @@ export default async function RootLayout({
                   </Link>
                 </Show>
               )}
+              {portal === 'vendor' && (
+                <Show when="signed-in">
+                  <Link
+                    href="/jobs"
+                    className="text-sm font-medium text-zinc-700 transition-colors hover:text-zinc-900"
+                  >
+                    Your queue
+                  </Link>
+                </Show>
+              )}
+              {portal === 'ops' && (
+                <Link
+                  href="/jobs"
+                  className="text-sm font-medium text-zinc-700 transition-colors hover:text-zinc-900"
+                >
+                  Jobs
+                </Link>
+              )}
               <Show when="signed-out">
                 <SignInButton />
                 <SignUpButton />
