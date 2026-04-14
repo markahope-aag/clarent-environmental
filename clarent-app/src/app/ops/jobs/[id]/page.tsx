@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
 import { db } from '@/lib/db/client';
 import {
@@ -8,8 +8,11 @@ import {
   generators,
   jobWasteStreams,
   jobs,
+  vendorCapabilities,
   vendors,
 } from '@/lib/db/schema';
+import { type JobState, nextStates } from '@/lib/workflow/state-machine';
+import OpsActionsPanel from './ops-actions-panel';
 
 type PageProps = {
   params: Promise<{ id: string }>;
@@ -77,6 +80,43 @@ export default async function OpsJobDetailPage({ params }: PageProps) {
     .from(generatorContacts)
     .innerJoin(jobs, eq(generatorContacts.generatorId, jobs.generatorId))
     .where(eq(jobs.id, id));
+
+  // Resolve eligible vendors for the Lane 2 picker.
+  // Pool = active vendors whose vendor_capabilities include this job's
+  // waste_framework. Further filtering by service area would be ideal but
+  // requires a larger refactor of vendor_service_areas parsing — good
+  // enough for MVP.
+  let eligibleVendors: Array<{
+    id: string;
+    name: string;
+    vendorType: string;
+    state: string | null;
+    performanceScore: string | null;
+  }> = [];
+
+  if (job.wasteFramework) {
+    const framework = job.wasteFramework;
+    eligibleVendors = await db
+      .selectDistinct({
+        id: vendors.id,
+        name: vendors.name,
+        vendorType: vendors.vendorType,
+        state: vendors.state,
+        performanceScore: vendors.performanceScore,
+      })
+      .from(vendors)
+      .innerJoin(vendorCapabilities, eq(vendorCapabilities.vendorId, vendors.id))
+      .where(
+        and(
+          eq(vendors.status, 'active'),
+          sql`${vendorCapabilities.wasteFramework}::text = ${framework}::text`,
+        ),
+      )
+      .orderBy(desc(vendors.performanceScore));
+  }
+
+  const currentState = job.state as JobState;
+  const allowedTransitions = nextStates(currentState);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-10">
@@ -205,6 +245,17 @@ export default async function OpsJobDetailPage({ params }: PageProps) {
             </dl>
           </section>
         )}
+
+        {/* Ops actions */}
+        <OpsActionsPanel
+          jobId={job.id}
+          currentState={currentState}
+          lane={job.lane as 'lane_1' | 'lane_2' | null}
+          currentEstimatedTotal={job.estimatedTotal}
+          assignedVendorId={null}
+          allowedTransitions={allowedTransitions}
+          eligibleVendors={eligibleVendors}
+        />
 
         {/* Notes */}
         {job.notes && (
