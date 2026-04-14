@@ -1,7 +1,12 @@
 import { clerkMiddleware } from '@clerk/nextjs/server';
 import { NextResponse, type NextRequest } from 'next/server';
+import { extractClientIp, isAllowedIp, parseAllowlist } from '@/lib/ip-allowlist';
 import { detectPortal, PORTAL_PREFIXES, type Portal } from '@/lib/portal';
 import { updateSession } from '@/utils/supabase/middleware';
+
+// Parse once per cold start — OPS_IP_ALLOWLIST env var with comma-separated
+// IPs or CIDRs. Empty value = gate disabled (useful for dev).
+const OPS_ALLOWLIST = parseAllowlist(process.env.OPS_IP_ALLOWLIST);
 
 // Paths that should never be rewritten (API routes, Next internals, webhooks).
 function isPassThroughPath(path: string): boolean {
@@ -24,6 +29,15 @@ export default clerkMiddleware(async (_auth, request: NextRequest) => {
   const host = request.headers.get('host');
   const portal = detectPortal(host);
   const path = request.nextUrl.pathname;
+
+  // IP allowlist on the ops subdomain — enforced before any other routing
+  // logic so forbidden clients can't even trigger a rewrite or auth check.
+  if (portal === 'ops' && OPS_ALLOWLIST.length > 0) {
+    const clientIp = extractClientIp(request.headers);
+    if (!isAllowedIp(clientIp, OPS_ALLOWLIST)) {
+      return new NextResponse('Forbidden', { status: 403 });
+    }
+  }
 
   // Block direct access to any portal subtree from a host that doesn't match.
   // e.g. clarentenvironmental.com/vendor/dashboard → 404
