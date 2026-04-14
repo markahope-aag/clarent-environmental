@@ -16,7 +16,17 @@
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "db:push": "supabase db push",
-    "db:seed:reference": "node scripts/seed-reference.mjs"
+    "db:seed:reference": "node scripts/seed-reference.mjs",
+    "prepare": "cd .. && git config core.hooksPath .husky 2>/dev/null || true"
+  },
+  "lint-staged": {
+    "src/**/*.{ts,tsx}": [
+      "prettier --write",
+      "eslint --fix --max-warnings 0"
+    ],
+    "src/**/*.{json,css,md}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "@clerk/nextjs": "^7.1.0",
@@ -40,6 +50,7 @@
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.2.3",
+    "lint-staged": "^16.4.0",
     "prettier": "^3.8.2",
     "prettier-plugin-tailwindcss": "^0.7.2",
     "tailwindcss": "^4",

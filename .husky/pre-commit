@@ -1,0 +1,17 @@
+#!/bin/sh
+# Clarent Environmental pre-commit hook.
+#
+# Runs lint-staged inside clarent-app when any file under clarent-app/ is
+# staged. Skips entirely if the commit only touches other parts of the
+# repo (docs, schema notes, etc.).
+#
+# Setup: `cd clarent-app && npm install` runs the prepare script, which
+# points git's core.hooksPath at this .husky directory.
+
+set -e
+
+# Are any staged files inside clarent-app/?
+if git diff --cached --name-only --diff-filter=ACMR | grep -q '^clarent-app/'; then
+  cd "$(git rev-parse --show-toplevel)/clarent-app"
+  npx lint-staged
+fi
