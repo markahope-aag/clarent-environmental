@@ -1,83 +1,85 @@
 import { auth } from '@clerk/nextjs/server';
-import { SignInButton, SignUpButton } from '@clerk/nextjs';
-import { eq } from 'drizzle-orm';
-import { redirect } from 'next/navigation';
+import { asc, eq } from 'drizzle-orm';
 import { db } from '@/lib/db/client';
-import { appOrganizations, generators } from '@/lib/db/schema';
+import {
+  appOrganizations,
+  generatorContacts,
+  generatorLocations,
+  generators,
+  wasteStreams,
+} from '@/lib/db/schema';
+import IntakeForm from './intake-form';
 
-export default async function GeneratorHomePage() {
+type SearchParams = Promise<{ created?: string }>;
+
+export default async function GeneratorHomePage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const params = await searchParams;
+  const justCreated = params.created === '1';
+
   const { userId, orgId } = await auth();
 
-  // Anonymous — show the welcome + sign up call to action
-  if (!userId) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center px-6 py-24">
-        <div className="max-w-xl text-center">
-          <div className="mb-3 text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">
-            Generator portal
-          </div>
-          <h1 className="text-3xl font-semibold tracking-tight">
-            Hazardous waste disposal made simple.
-          </h1>
-          <p className="mt-4 text-zinc-600">
-            Book compliant pickups, track jobs in real time, and manage your compliance calendar —
-            all in one place.
-          </p>
-          <div className="mt-8 flex items-center justify-center gap-3">
-            <SignUpButton>
-              <button className="rounded-full bg-black px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800">
-                Create account
-              </button>
-            </SignUpButton>
-            <SignInButton>
-              <button className="rounded-full border border-black/10 px-5 py-2 text-sm font-medium transition-colors hover:bg-black/5">
-                Sign in
-              </button>
-            </SignInButton>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Signed in but no active organization → onboarding
-  if (!orgId) {
-    redirect('/generator/onboarding');
-  }
-
-  // Signed in with an active organization → look up the linked generator
-  const [link] = await db
+  // Waste stream options for the dropdown
+  const streams = await db
     .select({
-      generatorId: appOrganizations.generatorId,
-      name: generators.name,
+      key: wasteStreams.key,
+      name: wasteStreams.name,
+      framework: wasteStreams.wasteFramework,
+      lane: wasteStreams.laneEligibility,
     })
-    .from(appOrganizations)
-    .leftJoin(generators, eq(appOrganizations.generatorId, generators.id))
-    .where(eq(appOrganizations.clerkOrganizationId, orgId))
-    .limit(1);
+    .from(wasteStreams)
+    .where(eq(wasteStreams.active, true))
+    .orderBy(asc(wasteStreams.name));
 
-  // Org exists in Clerk but not yet linked to a generator (webhook race or
-  // manual org creation outside the onboarding flow). Send to onboarding to
-  // complete the profile.
-  if (!link?.generatorId) {
-    redirect('/generator/onboarding');
+  // Pre-fill business fields for signed-in users with an active org
+  let prefill = null;
+  if (userId && orgId) {
+    const rows = await db
+      .select({
+        generatorId: generators.id,
+        generatorName: generators.name,
+        industry: generators.industry,
+        addressLine1: generatorLocations.addressLine1,
+        city: generatorLocations.city,
+        state: generatorLocations.state,
+        postalCode: generatorLocations.postalCode,
+        phone: generatorContacts.phone,
+      })
+      .from(appOrganizations)
+      .leftJoin(generators, eq(appOrganizations.generatorId, generators.id))
+      .leftJoin(generatorLocations, eq(generatorLocations.generatorId, generators.id))
+      .leftJoin(generatorContacts, eq(generatorContacts.generatorId, generators.id))
+      .where(eq(appOrganizations.clerkOrganizationId, orgId))
+      .limit(1);
+
+    const row = rows[0];
+    if (row?.generatorId) {
+      prefill = {
+        businessName: row.generatorName ?? '',
+        industry: row.industry,
+        addressLine1: row.addressLine1,
+        city: row.city,
+        state: row.state,
+        postalCode: row.postalCode,
+        phone: row.phone,
+      };
+    }
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-6 py-24">
-      <div className="max-w-xl text-center">
-        <div className="mb-3 text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">
-          Generator portal
+    <>
+      {justCreated && (
+        <div className="border-b border-green-200 bg-green-50 px-6 py-3 text-sm text-green-900">
+          <div className="mx-auto max-w-2xl">
+            <span className="font-semibold">Account created.</span> Your pickup request is
+            on file — we&rsquo;ll be in touch shortly.
+          </div>
         </div>
-        <h1 className="text-3xl font-semibold tracking-tight">Welcome back.</h1>
-        <p className="mt-4 text-zinc-600">
-          You&rsquo;re signed in as{' '}
-          <span className="font-medium text-zinc-900">{link.name}</span>.
-        </p>
-        <p className="mt-6 text-sm text-zinc-500">
-          Intake wizard, instant quotes, and job tracker arrive in Phase 3.
-        </p>
-      </div>
-    </div>
+      )}
+      <IntakeForm streams={streams} prefill={prefill} isSignedIn={!!userId} />
+    </>
   );
 }
