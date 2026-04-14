@@ -1,16 +1,27 @@
 'use server';
 
 import { auth } from '@clerk/nextjs/server';
-import { eq } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
-import { setPendingIntakeCookie, type PendingIntake } from '@/lib/intake-cookie';
+import { classify } from '@/lib/classification';
 import { db } from '@/lib/db/client';
-import { appOrganizations, generatorLocations, generators } from '@/lib/db/schema';
+import {
+  appOrganizations,
+  generatorLocations,
+  generators,
+  jobWasteStreams,
+  jobs,
+  wasteStreams,
+} from '@/lib/db/schema';
+import { setPendingIntakeCookie, type PendingIntake } from '@/lib/intake-cookie';
 
 export type IntakeFormState = {
   ok: boolean;
   error?: string;
   message?: string;
+  /** Populated when a real job was created. UI can redirect there. */
+  jobId?: string;
 };
 
 const parseIntakeForm = (formData: FormData): PendingIntake => ({
@@ -41,6 +52,12 @@ const validateWaste = (input: PendingIntake): string | null => {
   return null;
 };
 
+const generateReferenceNumber = (): string => {
+  const year = new Date().getFullYear();
+  const suffix = randomBytes(4).toString('hex').toUpperCase();
+  return `CLR-${year}-${suffix}`;
+};
+
 /**
  * Intake form server action.
  *
@@ -50,17 +67,14 @@ const validateWaste = (input: PendingIntake): string | null => {
  * the full Clarent account hierarchy once the Clerk user is created.
  *
  * Signed-in path: the user already has an active generator organization.
- * For now this returns a "request received" state without creating job
- * records — full job creation, Lane 1/2 routing, certification, and pricing
- * are Phase 3 work.
+ * This path inserts a real `jobs` row plus a `job_waste_streams` row,
+ * runs the rule-based classifier to decide Lane 1 vs Lane 2, and
+ * redirects the caller to the job detail view.
  */
 export async function submitIntakeAction(
   _prev: IntakeFormState,
   formData: FormData,
 ): Promise<IntakeFormState> {
-  // Intent is set by the submitter button's `name=intent value=...` attribute.
-  // - 'pickup_request' (default): user wants to schedule a pickup, validate everything
-  // - 'account_only': user just wants to set up a Clarent account, skip waste validation
   const intent = (formData.get('intent') as string | null) ?? 'pickup_request';
   const input = parseIntakeForm(formData);
 
@@ -71,8 +85,6 @@ export async function submitIntakeAction(
     const wasteError = validateWaste(input);
     if (wasteError) return { ok: false, error: wasteError };
   } else {
-    // Account-only signups: clear any partially-filled waste fields so the
-    // cookie doesn't carry a half-request into finalize.
     input.wasteStreamKey = '';
     input.containerType = '';
     input.containerCount = 0;
@@ -80,7 +92,9 @@ export async function submitIntakeAction(
 
   const { userId, orgId } = await auth();
 
-  // Signed-in with active org → would create a job here (Phase 3 scope)
+  // ---------------------------------------------------------------------------
+  // Signed-in path
+  // ---------------------------------------------------------------------------
   if (userId && orgId) {
     const [link] = await db
       .select({ generatorId: appOrganizations.generatorId })
@@ -94,9 +108,9 @@ export async function submitIntakeAction(
         error: 'Your account is not linked to a generator. Contact support.',
       };
     }
+    const generatorId: string = link.generatorId;
 
-    // Optionally update the generator's primary location with any changed
-    // address details the user edited on this intake.
+    // Update the generator's primary location + industry with any edits
     if (input.addressLine1 || input.city || input.state || input.postalCode) {
       await db
         .update(generatorLocations)
@@ -106,26 +120,120 @@ export async function submitIntakeAction(
           state: input.state || null,
           postalCode: input.postalCode || null,
         })
-        .where(eq(generatorLocations.generatorId, link.generatorId));
+        .where(
+          and(
+            eq(generatorLocations.generatorId, generatorId),
+            eq(generatorLocations.isPrimary, true),
+          ),
+        );
     }
 
     if (input.industry) {
       await db
         .update(generators)
         .set({ industry: input.industry })
-        .where(eq(generators.id, link.generatorId));
+        .where(eq(generators.id, generatorId));
     }
 
-    return {
-      ok: true,
-      message:
-        intent === 'account_only'
-          ? 'Profile updated.'
-          : 'Request received. Full job creation, Lane 1 pricing, and the certification step arrive in Phase 3.',
-    };
+    // account_only: no job creation, just profile updates
+    if (intent === 'account_only') {
+      return { ok: true, message: 'Profile updated.' };
+    }
+
+    // Resolve the waste stream metadata for classification
+    const [stream] = await db
+      .select({
+        key: wasteStreams.key,
+        laneEligibility: wasteStreams.laneEligibility,
+        wasteFramework: wasteStreams.wasteFramework,
+      })
+      .from(wasteStreams)
+      .where(eq(wasteStreams.key, input.wasteStreamKey))
+      .limit(1);
+
+    if (!stream) {
+      return { ok: false, error: 'Unknown waste type. Please choose from the list.' };
+    }
+
+    // Find primary location
+    const [location] = await db
+      .select({ id: generatorLocations.id })
+      .from(generatorLocations)
+      .where(
+        and(
+          eq(generatorLocations.generatorId, generatorId),
+          eq(generatorLocations.isPrimary, true),
+        ),
+      )
+      .limit(1);
+
+    if (!location?.id) {
+      return {
+        ok: false,
+        error: 'No primary pickup location on file. Please complete your profile.',
+      };
+    }
+    const locationId: string = location.id;
+
+    // Run the classifier
+    const classification = classify({
+      stream: { key: stream.key, laneEligibility: stream.laneEligibility },
+      containerType: input.containerType,
+      containerCount: input.containerCount,
+      // Intake form doesn't yet capture condition — assume intact for first pass.
+      // Phase 3 intake wizard will collect this explicitly.
+      containerCondition: 'intact',
+      unContainerCertified: true,
+      generatorCertifiedNoMixing: true,
+    });
+
+    // Insert job + waste stream in one transaction
+    let createdJobId: string | undefined;
+    const referenceNumber = generateReferenceNumber();
+    try {
+      await db.transaction(async (tx) => {
+        const [job] = await tx
+          .insert(jobs)
+          .values({
+            referenceNumber,
+            generatorId,
+            generatorLocationId: locationId,
+            state: classification.lane === 'lane_1' ? 'classified_standard' : 'classified_complex',
+            lane: classification.lane,
+            wasteFramework: stream.wasteFramework,
+            classificationConfidence: classification.confidence.toFixed(2),
+            notes: input.notes || null,
+          })
+          .returning({ id: jobs.id });
+
+        createdJobId = job.id;
+
+        await tx.insert(jobWasteStreams).values({
+          jobId: job.id,
+          wasteStreamKey: input.wasteStreamKey,
+          containerType: input.containerType,
+          containerCount: input.containerCount,
+          unContainerCertified: true,
+        });
+      });
+    } catch (err) {
+      console.error('job creation failed:', err);
+      return {
+        ok: false,
+        error: 'Could not submit your request. Please try again.',
+      };
+    }
+
+    if (createdJobId) {
+      redirect(`/generator/jobs/${createdJobId}`);
+    }
+
+    return { ok: false, error: 'Job creation succeeded but no job id returned.' };
   }
 
-  // Anonymous → stash intake and redirect into Clerk sign-up
+  // ---------------------------------------------------------------------------
+  // Anonymous path
+  // ---------------------------------------------------------------------------
   await setPendingIntakeCookie(input);
   redirect('/sign-up?redirect_url=/generator/finalize');
 }
